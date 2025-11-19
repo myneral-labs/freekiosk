@@ -21,11 +21,13 @@ type NavigationProp = NativeStackNavigationProp<RootStackParamList>;
 interface WebViewComponentProps {
   url: string;
   autoReload: boolean;
+  onUserInteraction?: () => void; // callback optionnel pour interaction utilisateur
 }
 
 const WebViewComponent: React.FC<WebViewComponentProps> = ({ 
   url, 
-  autoReload
+  autoReload,
+  onUserInteraction
 }) => {
   const navigation = useNavigation<NavigationProp>();
   const webViewRef = useRef<WebView>(null);
@@ -41,6 +43,7 @@ const WebViewComponent: React.FC<WebViewComponentProps> = ({
     }).start();
   }, []);
 
+  // Injection JS pour détecter les clics dans la webview
   const injectedJavaScript = `
     (function() {
       console.log('[FreeKiosk] Navigation interceptor starting...');
@@ -60,11 +63,24 @@ const WebViewComponent: React.FC<WebViewComponentProps> = ({
           return false;
         }
       }, true);
+
+      // Envoi message React Native à chaque clic utilisateur
+      document.addEventListener('click', function() {
+        window.ReactNativeWebView.postMessage('user-interaction');
+      });
       
       console.log('[FreeKiosk] Navigation interceptor active');
     })();
     true;
   `;
+
+  // Gestion des messages venant de la webview
+  const onMessageHandler = (event: any) => {
+    if (event.nativeEvent.data === 'user-interaction' && onUserInteraction) {
+      console.log('[FreeKiosk] User interaction detected from WebView');
+      onUserInteraction();
+    }
+  };
 
   const handleError = (event: WebViewErrorEvent): void => {
     console.log('[FreeKiosk] WebView error:', event.nativeEvent);
@@ -101,8 +117,8 @@ const WebViewComponent: React.FC<WebViewComponentProps> = ({
           showsVerticalScrollIndicator={false}
         >
           <Animated.View style={[styles.welcomeContent, { opacity: fadeAnim }]}>
-            
-            {/* Logo / Icon */}
+              
+              {/* Logo / Icon */}
             <View style={styles.logoContainer}>
               <View style={styles.logoCircle}>
                 <Image 
@@ -159,9 +175,8 @@ const WebViewComponent: React.FC<WebViewComponentProps> = ({
 
             {/* Footer */}
             <Text style={styles.footerText}>
-              Version 1.0.3 • by Rushb
+              Version 1.0.4 • by Rushb
             </Text>
-
           </Animated.View>
         </ScrollView>
       </View>
@@ -175,12 +190,10 @@ const WebViewComponent: React.FC<WebViewComponentProps> = ({
         source={{ uri: url }}
         style={styles.webview}
         
-        // SSL / HTTPS SUPPORT
         originWhitelist={['*']}
         mixedContentMode="always"
         onHttpError={handleHttpError}
         
-        // Lifecycle
         onLoadStart={() => {
           console.log('[FreeKiosk] Load started');
           setLoading(true);
@@ -192,16 +205,15 @@ const WebViewComponent: React.FC<WebViewComponentProps> = ({
         }}
         onError={handleError}
         
-        // JavaScript
         javaScriptEnabled={true}
         domStorageEnabled={true}
         injectedJavaScript={injectedJavaScript}
         injectedJavaScriptBeforeContentLoaded={injectedJavaScript}
-        
-        // Loading
+
+        onMessage={onMessageHandler}
+
         startInLoadingState={true}
         
-        // Navigation
         onShouldStartLoadWithRequest={(request: ShouldStartLoadRequest) => {
           console.log('[FreeKiosk] Navigation request:', request.url);
           return true;
@@ -211,17 +223,14 @@ const WebViewComponent: React.FC<WebViewComponentProps> = ({
           console.log('[FreeKiosk] Navigation state:', navState.url, 'Loading:', navState.loading);
         }}
         
-        // Display & Performance
         scalesPageToFit={true}
         cacheEnabled={true}
         cacheMode="LOAD_DEFAULT"
         
-        // Permissions
         allowFileAccess={true}
         allowUniversalAccessFromFileURLs={true}
         allowFileAccessFromFileURLs={true}
         
-        // Media
         mediaPlaybackRequiresUserAction={false}
         allowsInlineMediaPlayback={true}
       />
@@ -252,12 +261,14 @@ const WebViewComponent: React.FC<WebViewComponentProps> = ({
   );
 };
 
+
 const FeatureItem: React.FC<{ icon: string; text: string }> = ({ icon, text }) => (
   <View style={styles.featureItem}>
     <Text style={styles.featureIcon}>{icon}</Text>
     <Text style={styles.featureText}>{text}</Text>
   </View>
 );
+
 
 const styles = StyleSheet.create({
   // WELCOME SCREEN STYLES

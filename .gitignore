@@ -90,4 +90,6 @@ release-builds/
 *.aab
 !app-release.apk
 android/gradle.properties
+launch.md
 ROADMAP.md
+Features.md

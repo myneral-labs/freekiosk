@@ -11,6 +11,7 @@ import {
   Alert,
   Linking,
 } from 'react-native';
+import Slider from '@react-native-community/slider'; // À installer si pas déjà fait
 import { StorageService } from '../utils/storage';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import type { RootStackParamList } from '../navigation/AppNavigator';
@@ -29,6 +30,9 @@ const SettingsScreen: React.FC<SettingsScreenProps> = ({ navigation }) => {
   const [autoReload, setAutoReload] = useState<boolean>(false);
   const [kioskEnabled, setKioskEnabled] = useState<boolean>(false);
   const [autoLaunchEnabled, setAutoLaunchEnabled] = useState<boolean>(false);
+  const [screensaverEnabled, setScreensaverEnabled] = useState<boolean>(false);
+  const [screensaverDelay, setScreensaverDelay] = useState<string>('10');
+  const [defaultBrightness, setDefaultBrightness] = useState<number>(1); // NOUVEAU (0 à 1)
 
   useEffect(() => {
     loadSettings();
@@ -40,12 +44,23 @@ const SettingsScreen: React.FC<SettingsScreenProps> = ({ navigation }) => {
     const savedAutoReload = await StorageService.getAutoReload();
     const savedKioskEnabled = await StorageService.getKioskEnabled();
     const savedAutoLaunch = await StorageService.getAutoLaunch();
+    const savedScreensaverEnabled = await StorageService.getScreensaverEnabled();
+    const savedScreensaverDelay = await StorageService.getScreensaverDelay();
+    const savedDefaultBrightness = await StorageService.getDefaultBrightness(); // NOUVEAU
 
     if (savedUrl) setUrl(savedUrl);
     if (savedPin) setPin(savedPin);
     setAutoReload(savedAutoReload);
     setKioskEnabled(savedKioskEnabled);
     setAutoLaunchEnabled(savedAutoLaunch ?? false);
+    setScreensaverEnabled(savedScreensaverEnabled ?? false);
+    setDefaultBrightness(savedDefaultBrightness ?? 1); // NOUVEAU
+
+    if (savedScreensaverDelay && !isNaN(savedScreensaverDelay)) {
+      setScreensaverDelay(String(Math.floor(savedScreensaverDelay / 60000)));
+    } else {
+      setScreensaverDelay('10');
+    }
   };
 
   const toggleAutoLaunch = async (value: boolean) => {
@@ -71,12 +86,20 @@ const SettingsScreen: React.FC<SettingsScreenProps> = ({ navigation }) => {
       Alert.alert('Error', 'PIN code must contain at least 4 digits');
       return;
     }
+    const delayNumber = parseInt(screensaverDelay, 10);
+    if (isNaN(delayNumber) || delayNumber <= 0) {
+      Alert.alert('Error', 'Please enter a valid positive number for screensaver delay');
+      return;
+    }
 
     await StorageService.saveUrl(url);
     await StorageService.savePin(pin);
     await StorageService.saveAutoReload(autoReload);
     await StorageService.saveKioskEnabled(kioskEnabled);
     await StorageService.saveAutoLaunch(autoLaunchEnabled);
+    await StorageService.saveScreensaverEnabled(screensaverEnabled);
+    await StorageService.saveScreensaverDelay(delayNumber * 60000);
+    await StorageService.saveDefaultBrightness(defaultBrightness); // NOUVEAU
 
     if (kioskEnabled) {
       try {
@@ -106,16 +129,13 @@ const SettingsScreen: React.FC<SettingsScreenProps> = ({ navigation }) => {
       'Reset Settings',
       'This will erase all settings (URL, PIN, preferences, SSL certificates) and restart the app with default values.\n\nContinue?',
       [
-        {
-          text: 'Cancel',
-          style: 'cancel',
-        },
+        { text: 'Cancel', style: 'cancel' },
         {
           text: 'Reset',
           style: 'destructive',
           onPress: async () => {
             try {
-              await StorageService.clearAll(); // Implémentez cette méthode si besoin
+              await StorageService.clearAll();
               await CertificateModule.clearAcceptedCertificates();
 
               setUrl('');
@@ -123,11 +143,14 @@ const SettingsScreen: React.FC<SettingsScreenProps> = ({ navigation }) => {
               setAutoReload(false);
               setKioskEnabled(false);
               setAutoLaunchEnabled(false);
+              setScreensaverEnabled(false);
+              setScreensaverDelay('10');
+              setDefaultBrightness(1); // NOUVEAU
 
               try {
                 await KioskModule.stopLockTask();
-              } catch (e) {
-                console.log('Not in lock task');
+              } catch {
+                // ignore
               }
 
               Alert.alert('Success', 'Settings reset successfully!\nPlease configure the app again.', [
@@ -147,10 +170,7 @@ const SettingsScreen: React.FC<SettingsScreenProps> = ({ navigation }) => {
       'Exit Kiosk Mode',
       'Are you sure you want to exit kiosk mode?\n\nThis will close the application and disable the lock.',
       [
-        {
-          text: 'Cancel',
-          style: 'cancel',
-        },
+        { text: 'Cancel', style: 'cancel' },
         {
           text: 'Exit',
           style: 'destructive',
@@ -170,10 +190,11 @@ const SettingsScreen: React.FC<SettingsScreenProps> = ({ navigation }) => {
   };
 
   return (
-    <ScrollView style={styles.container}>
+    <ScrollView style={styles.container} keyboardShouldPersistTaps="handled">
       <View style={styles.content}>
         <Text style={styles.title}>⚙️ Kiosk Configuration</Text>
 
+        {/* Vos sections existantes... */}
         <View style={styles.section}>
           <Text style={styles.label}>🌐 URL to Display</Text>
           <TextInput
@@ -201,6 +222,27 @@ const SettingsScreen: React.FC<SettingsScreenProps> = ({ navigation }) => {
           <Text style={styles.hint}>Minimum 4 digits (default: 1234)</Text>
         </View>
 
+        {/* NOUVELLE SECTION : Luminosité par défaut */}
+        <View style={styles.section}>
+          <Text style={styles.label}>💡 Default Brightness</Text>
+          <Text style={styles.hint}>Set the default screen brightness level (0% - 100%)</Text>
+          <View style={{ marginTop: 15 }}>
+            <Text style={styles.brightnessValue}>{Math.round(defaultBrightness * 100)}%</Text>
+            <Slider
+              style={{ width: '100%', height: 40 }}
+              minimumValue={0}
+              maximumValue={1}
+              step={0.01}
+              value={defaultBrightness}
+              onValueChange={setDefaultBrightness}
+              minimumTrackTintColor="#0066cc"
+              maximumTrackTintColor="#ddd"
+              thumbTintColor="#0066cc"
+            />
+          </View>
+        </View>
+
+        {/* Vos autres sections existantes (Auto Launch, Pin App, etc.) */}
         <View style={styles.section}>
           <View style={styles.switchRow}>
             <View style={{ flex: 1 }}>
@@ -218,9 +260,7 @@ const SettingsScreen: React.FC<SettingsScreenProps> = ({ navigation }) => {
             <Text style={styles.warningText}>
               ⚠️ For non-Device Owner devices, please enable the "Appear on top" permission in the system settings.
             </Text>
-            <Text style={styles.hint}>
-              This permission is only necessary for the auto launch feature to work.
-            </Text>
+            <Text style={styles.hint}>This permission is only necessary for the auto launch feature to work.</Text>
             <TouchableOpacity style={styles.saveButton} onPress={() => Linking.openSettings()}>
               <Text style={styles.saveButtonText}>📲 Open Settings</Text>
             </TouchableOpacity>
@@ -232,8 +272,10 @@ const SettingsScreen: React.FC<SettingsScreenProps> = ({ navigation }) => {
             <View style={{ flex: 1 }}>
               <Text style={styles.label}>📌 Pin App to Screen</Text>
               <Text style={styles.hint}>
-                Lock app in kiosk mode (requires Device Owner){'\n'}
-                When ON: Swipe gestures blocked, need PIN to exit{'\n'}
+                Lock app in kiosk mode (requires Device Owner)
+                {'\n'}
+                When ON: Swipe gestures blocked, need PIN to exit
+                {'\n'}
                 When OFF: Swipe up to exit normally
               </Text>
             </View>
@@ -244,13 +286,11 @@ const SettingsScreen: React.FC<SettingsScreenProps> = ({ navigation }) => {
               thumbColor={kioskEnabled ? '#0066cc' : '#f4f3f4'}
             />
           </View>
-
           {!kioskEnabled && (
             <View style={styles.warningBox}>
               <Text style={styles.warningText}>⚠️ Warning: With screen pinning disabled, users can swipe up to exit the app</Text>
             </View>
           )}
-
           {kioskEnabled && (
             <View style={styles.infoSubBox}>
               <Text style={styles.infoSubText}>ℹ️ Screen pinning enabled: Only 5-tap gesture + PIN code allows exit</Text>
@@ -271,6 +311,40 @@ const SettingsScreen: React.FC<SettingsScreenProps> = ({ navigation }) => {
               thumbColor={autoReload ? '#0066cc' : '#f4f3f4'}
             />
           </View>
+        </View>
+
+        {/* Section Screensaver */}
+        <View style={styles.section}>
+          <View style={styles.switchRow}>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.label}>🛌 Activate Screensaver</Text>
+              <Text style={styles.hint}>Enable or disable the black screen screensaver</Text>
+            </View>
+            <Switch
+              value={screensaverEnabled}
+              onValueChange={setScreensaverEnabled}
+              trackColor={{ false: '#767577', true: '#81b0ff' }}
+              thumbColor={screensaverEnabled ? '#0066cc' : '#f4f3f4'}
+            />
+          </View>
+
+          {screensaverEnabled && (
+            <View style={{ marginTop: 10 }}>
+              <Text style={styles.label}>⏳ Delay (minutes)</Text>
+              <TextInput
+                style={styles.input}
+                value={screensaverDelay}
+                onChangeText={(text) => {
+                  if (/^\d*$/.test(text)) {
+                    setScreensaverDelay(text);
+                  }
+                }}
+                keyboardType="numeric"
+                maxLength={3}
+                placeholder="10"
+              />
+            </View>
+          )}
         </View>
 
         <TouchableOpacity style={styles.saveButton} onPress={handleSave}>
@@ -358,6 +432,13 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
+  },
+  brightnessValue: {
+    fontSize: 20,
+    fontWeight: 'bold',
+    color: '#0066cc',
+    textAlign: 'center',
+    marginBottom: 10,
   },
   warningBox: {
     marginTop: 10,

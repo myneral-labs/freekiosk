@@ -6,9 +6,13 @@ const KEYS = {
   AUTO_RELOAD: '@kiosk_auto_reload',
   KIOSK_ENABLED: '@kiosk_enabled',
   AUTO_LAUNCH: '@kiosk_auto_launch',
+  SCREENSAVER_ENABLED: '@screensaver_enabled',
+  SCREENSAVER_DELAY: '@screensaver_delay',
+  DEFAULT_BRIGHTNESS: '@default_brightness'
 };
 
 export const StorageService = {
+  //URL
   saveUrl: async (url: string): Promise<void> => {
     try {
       await AsyncStorage.setItem(KEYS.URL, url);
@@ -26,6 +30,7 @@ export const StorageService = {
     }
   },
 
+  //PIN
   savePin: async (pin: string): Promise<void> => {
     try {
       await AsyncStorage.setItem(KEYS.PIN, pin);
@@ -43,6 +48,7 @@ export const StorageService = {
     }
   },
 
+  //AUTORELOAD
   saveAutoReload: async (value: boolean): Promise<void> => {
     try {
       await AsyncStorage.setItem(KEYS.AUTO_RELOAD, JSON.stringify(value));
@@ -61,6 +67,7 @@ export const StorageService = {
     }
   },
 
+  //KIOSKMODE
   saveKioskEnabled: async (value: boolean): Promise<void> => {
     try {
       await AsyncStorage.setItem(KEYS.KIOSK_ENABLED, JSON.stringify(value));
@@ -80,7 +87,7 @@ export const StorageService = {
     }
   },
 
-  // Ajout des méthodes Auto Launch avec bonne clé KEYS.AUTO_LAUNCH
+  //AUTOLAUNCH
   saveAutoLaunch: async (value: boolean): Promise<void> => {
     try {
       await AsyncStorage.setItem(KEYS.AUTO_LAUNCH, JSON.stringify(value));
@@ -99,17 +106,81 @@ export const StorageService = {
     }
   },
 
+  //CLEAR ALL
   async clearAll(): Promise<void> {
-  try {
-    await AsyncStorage.multiRemove([
-      KEYS.URL,
-      KEYS.PIN,
-      KEYS.AUTO_RELOAD,
-      KEYS.KIOSK_ENABLED,
-      KEYS.AUTO_LAUNCH,
-    ]);
-  } catch (error) {
-    console.error('Error clearing all storage keys:', error);
-  }
-}
+    try {
+      await AsyncStorage.multiRemove([
+        KEYS.URL,
+        KEYS.PIN,
+        KEYS.AUTO_RELOAD,
+        KEYS.KIOSK_ENABLED,
+        KEYS.AUTO_LAUNCH,
+        KEYS.SCREENSAVER_DELAY,
+        KEYS.SCREENSAVER_ENABLED,
+        KEYS.DEFAULT_BRIGHTNESS,
+      ]);
+    } catch (error) {
+      console.error('Error clearing all storage keys:', error);
+    }
+  },
+
+  //SCREENSAVER
+  saveScreensaverEnabled: async (value: boolean): Promise<void> => {
+    try {
+      await AsyncStorage.setItem(KEYS.SCREENSAVER_ENABLED, JSON.stringify(value));
+    } catch (error) {
+      console.error('Error saving screensaver enabled:', error);
+    }
+  },
+
+  getScreensaverEnabled: async (): Promise<boolean> => {
+    try {
+      const value = await AsyncStorage.getItem(KEYS.SCREENSAVER_ENABLED);
+      // Par défaut FALSE si clé absente
+      return value === null ? false : JSON.parse(value);
+    } catch (error) {
+      console.error('Error getting screensaver enabled:', error);
+      return false;
+    }
+  },
+
+  saveScreensaverDelay: async (value: number): Promise<void> => {
+    try {
+      await AsyncStorage.setItem(KEYS.SCREENSAVER_DELAY, JSON.stringify(value));
+    } catch (error) {
+      console.error('Error saving screensaver delay:', error);
+    }
+  },
+
+  getScreensaverDelay: async (): Promise<number> => {
+    try {
+      const value = await AsyncStorage.getItem(KEYS.SCREENSAVER_DELAY);
+      // Par défaut 600000 ms (10 minutes) si clé absente
+      return value === null ? 60000 : JSON.parse(value);
+    } catch (error) {
+      console.error('Error getting screensaver delay:', error);
+      return 600000;
+    }
+  },
+
+  //BRIGHTNESS
+  saveDefaultBrightness: async (value: number): Promise<void> => {
+    try {
+      await AsyncStorage.setItem(KEYS.DEFAULT_BRIGHTNESS, JSON.stringify(value));
+    } catch (error) {
+      console.error('Error saving default brightness:', error);
+    }
+  },
+
+  getDefaultBrightness: async (): Promise<number> => {
+    try {
+      const value = await AsyncStorage.getItem(KEYS.DEFAULT_BRIGHTNESS);
+      // Par défaut 1 (100%) si clé absente
+      return value === null ? 1 : JSON.parse(value);
+    } catch (error) {
+      console.error('Error getting default brightness:', error);
+      return 1;
+    }
+  },
+
 };

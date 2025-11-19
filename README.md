@@ -206,7 +206,15 @@ Done! Your tablet is now in kiosk mode.
 
 ## 🗺️ Roadmap
 
-### ✅ v1.0.3 (Current - Nov 2025)
+### ✅ v1.0.4 (Current - Nov 2025)
+- 🔆 Brightness control: Adjustable screen brightness slider in settings
+- 🌙 Screensaver mode: Configurable inactivity timer that dims screen to save power
+- 🎥 Added CAMERA permission for web apps needing camera access
+- 🎤 Added RECORD_AUDIO permission for web apps with audio features
+- 📍 Added ACCESS_FINE_LOCATION and ACCESS_COARSE_LOCATION permissions for location-based web apps
+- 📁 Added READ_EXTERNAL_STORAGE and WRITE_EXTERNAL_STORAGE permissions for file access support
+
+### ✅ v1.0.3 (Nov 2025)
 - ✅ Auto-launch toggle: Enable/disable automatic app launch at device boot
 - ✅ Screen always-on feature: Keep screen awake while app is running
 - ✅ Improved Device Owner auto-launch handling
