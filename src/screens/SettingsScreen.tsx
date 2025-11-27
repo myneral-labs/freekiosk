@@ -10,13 +10,18 @@ import {
   StyleSheet,
   Alert,
   Linking,
+  FlatList,
 } from 'react-native';
-import Slider from '@react-native-community/slider'; // À installer si pas déjà fait
+import Slider from '@react-native-community/slider';
+import CookieManager from '@react-native-cookies/cookies';
+import { Camera } from 'react-native-vision-camera';
 import { StorageService } from '../utils/storage';
+import { saveSecurePin, hasSecurePin, clearSecurePin } from '../utils/secureStorage';
+import CertificateModuleTyped, { CertificateInfo } from '../utils/CertificateModule';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import type { RootStackParamList } from '../navigation/AppNavigator';
 
-const { KioskModule, CertificateModule } = NativeModules;
+const { KioskModule } = NativeModules;
 
 type SettingsScreenNavigationProp = NativeStackNavigationProp<RootStackParamList, 'Settings'>;
 
@@ -27,39 +32,66 @@ interface SettingsScreenProps {
 const SettingsScreen: React.FC<SettingsScreenProps> = ({ navigation }) => {
   const [url, setUrl] = useState<string>('');
   const [pin, setPin] = useState<string>('');
+  const [isPinConfigured, setIsPinConfigured] = useState<boolean>(false);
   const [autoReload, setAutoReload] = useState<boolean>(false);
   const [kioskEnabled, setKioskEnabled] = useState<boolean>(false);
   const [autoLaunchEnabled, setAutoLaunchEnabled] = useState<boolean>(false);
   const [screensaverEnabled, setScreensaverEnabled] = useState<boolean>(false);
-  const [screensaverDelay, setScreensaverDelay] = useState<string>('10');
-  const [defaultBrightness, setDefaultBrightness] = useState<number>(1); // NOUVEAU (0 à 1)
+  const [inactivityDelay, setInactivityDelay] = useState<string>('10');
+  const [motionEnabled, setMotionEnabled] = useState<boolean>(false);
+  const [screensaverBrightness, setScreensaverBrightness] = useState<number>(0);
+  const [defaultBrightness, setDefaultBrightness] = useState<number>(0.5);
+  const [certificates, setCertificates] = useState<CertificateInfo[]>([]);
 
   useEffect(() => {
     loadSettings();
+    loadCertificates();
   }, []);
 
   const loadSettings = async (): Promise<void> => {
     const savedUrl = await StorageService.getUrl();
-    const savedPin = await StorageService.getPin();
     const savedAutoReload = await StorageService.getAutoReload();
     const savedKioskEnabled = await StorageService.getKioskEnabled();
     const savedAutoLaunch = await StorageService.getAutoLaunch();
     const savedScreensaverEnabled = await StorageService.getScreensaverEnabled();
-    const savedScreensaverDelay = await StorageService.getScreensaverDelay();
-    const savedDefaultBrightness = await StorageService.getDefaultBrightness(); // NOUVEAU
+    const savedDefaultBrightness = await StorageService.getDefaultBrightness();
+
+    // New screensaver architecture
+    const savedInactivityDelay = await StorageService.getScreensaverInactivityDelay();
+    const savedMotionEnabled = await StorageService.getScreensaverMotionEnabled();
+    const savedScreensaverBrightness = await StorageService.getScreensaverBrightness();
+
+    // Check if a secure PIN is already configured
+    const hasPinConfigured = await hasSecurePin();
+    setIsPinConfigured(hasPinConfigured);
 
     if (savedUrl) setUrl(savedUrl);
-    if (savedPin) setPin(savedPin);
+    if (hasPinConfigured) {
+      setPin('');
+    }
+
     setAutoReload(savedAutoReload);
     setKioskEnabled(savedKioskEnabled);
     setAutoLaunchEnabled(savedAutoLaunch ?? false);
     setScreensaverEnabled(savedScreensaverEnabled ?? false);
-    setDefaultBrightness(savedDefaultBrightness ?? 1); // NOUVEAU
+    setDefaultBrightness(savedDefaultBrightness ?? 0.5);
 
-    if (savedScreensaverDelay && !isNaN(savedScreensaverDelay)) {
-      setScreensaverDelay(String(Math.floor(savedScreensaverDelay / 60000)));
+    setMotionEnabled(savedMotionEnabled ?? false);
+    setScreensaverBrightness(savedScreensaverBrightness ?? 0);
+
+    if (savedInactivityDelay && !isNaN(savedInactivityDelay)) {
+      setInactivityDelay(String(Math.floor(savedInactivityDelay / 60000)));
     } else {
-      setScreensaverDelay('10');
+      setInactivityDelay('10');
+    }
+  };
+
+  const loadCertificates = async (): Promise<void> => {
+    try {
+      const certs = await CertificateModuleTyped.getAcceptedCertificates();
+      setCertificates(certs);
+    } catch (error) {
+      console.log('Error loading certificates:', error);
     }
   };
 
@@ -77,29 +109,114 @@ const SettingsScreen: React.FC<SettingsScreenProps> = ({ navigation }) => {
     }
   };
 
+
+  const toggleMotionDetection = async (value: boolean) => {
+    if (value) {
+      const permission = await Camera.requestCameraPermission();
+      if (permission === 'denied') {
+        Alert.alert(
+          'Camera Permission Required',
+          'Camera access is required for motion detection.\n\nPlease enable camera permission in device settings.',
+          [
+            { text: 'Cancel', style: 'cancel' },
+            { text: 'Open Settings', onPress: () => Linking.openSettings() }
+          ]
+        );
+        return;
+      }
+      if (permission === 'granted') {
+        setMotionEnabled(true);
+      }
+    } else {
+      setMotionEnabled(false);
+    }
+  };
+
   const handleSave = async (): Promise<void> => {
     if (!url) {
       Alert.alert('Error', 'Please enter a URL');
       return;
     }
-    if (!pin || pin.length < 4) {
-      Alert.alert('Error', 'PIN code must contain at least 4 digits');
+
+    // Trim whitespace
+    let finalUrl = url.trim();
+    const urlLower = finalUrl.toLowerCase();
+
+    // Security: Block dangerous URL schemes
+    if (urlLower.startsWith('file://')) {
+      Alert.alert('Security Error', 'File URLs are not allowed for security reasons.\n\nPlease use http:// or https:// URLs only.');
       return;
     }
-    const delayNumber = parseInt(screensaverDelay, 10);
-    if (isNaN(delayNumber) || delayNumber <= 0) {
-      Alert.alert('Error', 'Please enter a valid positive number for screensaver delay');
+    if (urlLower.startsWith('javascript:')) {
+      Alert.alert('Security Error', 'JavaScript URLs are not allowed for security reasons.\n\nPlease use http:// or https:// URLs only.');
+      return;
+    }
+    if (urlLower.startsWith('data:')) {
+      Alert.alert('Security Error', 'Data URLs are not allowed for security reasons.\n\nPlease use http:// or https:// URLs only.');
       return;
     }
 
-    await StorageService.saveUrl(url);
-    await StorageService.savePin(pin);
+    // Auto-add https:// if no protocol specified
+    if (!urlLower.startsWith('http://') && !urlLower.startsWith('https://')) {
+      // Check if it looks like a valid domain (contains at least one dot)
+      if (finalUrl.includes('.')) {
+        finalUrl = 'https://' + finalUrl;
+        console.log('[Settings] Auto-added https:// to URL:', finalUrl);
+
+        // Update the input field to show the complete URL
+        setUrl(finalUrl);
+
+        Alert.alert(
+          'URL Updated',
+          `Added https:// to your URL:\n\n${finalUrl}\n\nClick Save again to confirm.`,
+          [{ text: 'OK' }]
+        );
+        return;
+      } else {
+        Alert.alert('Invalid URL', 'Please enter a valid URL (e.g., example.com or https://example.com)');
+        return;
+      }
+    }
+
+    // Only validate PIN if user entered a new one
+    if (pin && pin.length > 0) {
+      if (pin.length < 4) {
+        Alert.alert('Error', 'PIN code must contain at least 4 digits');
+        return;
+      }
+    } else if (!isPinConfigured) {
+      // No PIN configured yet and user didn't enter one
+      Alert.alert('Error', 'Please enter a PIN code');
+      return;
+    }
+
+    // Validate inactivity delay
+    const inactivityDelayNumber = parseInt(inactivityDelay, 10);
+    if (isNaN(inactivityDelayNumber) || inactivityDelayNumber <= 0) {
+      Alert.alert('Error', 'Please enter a valid positive number for inactivity delay');
+      return;
+    }
+
+    await StorageService.saveUrl(finalUrl);
+
+    // Save PIN only if user entered a new one
+    if (pin && pin.length >= 4) {
+      await saveSecurePin(pin);
+      await StorageService.savePin('');
+      setIsPinConfigured(true);
+    }
+
     await StorageService.saveAutoReload(autoReload);
     await StorageService.saveKioskEnabled(kioskEnabled);
     await StorageService.saveAutoLaunch(autoLaunchEnabled);
     await StorageService.saveScreensaverEnabled(screensaverEnabled);
-    await StorageService.saveScreensaverDelay(delayNumber * 60000);
-    await StorageService.saveDefaultBrightness(defaultBrightness); // NOUVEAU
+    await StorageService.saveDefaultBrightness(defaultBrightness);
+
+    // Save new screensaver architecture (inactivity is always enabled)
+    await StorageService.saveScreensaverInactivityEnabled(true);
+    await StorageService.saveScreensaverInactivityDelay(inactivityDelayNumber * 60000);
+    await StorageService.saveScreensaverMotionEnabled(motionEnabled);
+    await StorageService.saveScreensaverBrightness(screensaverBrightness);
 
     if (kioskEnabled) {
       try {
@@ -127,7 +244,7 @@ const SettingsScreen: React.FC<SettingsScreenProps> = ({ navigation }) => {
   const handleResetSettings = async (): Promise<void> => {
     Alert.alert(
       'Reset Settings',
-      'This will erase all settings (URL, PIN, preferences, SSL certificates) and restart the app with default values.\n\nContinue?',
+      'This will erase all settings (URL, PIN, preferences, SSL certificates, and cookies) and restart the app with default values.\n\nContinue?',
       [
         { text: 'Cancel', style: 'cancel' },
         {
@@ -135,17 +252,26 @@ const SettingsScreen: React.FC<SettingsScreenProps> = ({ navigation }) => {
           style: 'destructive',
           onPress: async () => {
             try {
+              // Clear all storage including secure PIN
               await StorageService.clearAll();
-              await CertificateModule.clearAcceptedCertificates();
+              await CertificateModuleTyped.clearAcceptedCertificates();
+              await clearSecurePin(); // Clear PIN from Android Keystore
+
+              // Clear all cookies
+              await CookieManager.clearAll();
 
               setUrl('');
               setPin('');
+              setIsPinConfigured(false);
               setAutoReload(false);
               setKioskEnabled(false);
               setAutoLaunchEnabled(false);
               setScreensaverEnabled(false);
-              setScreensaverDelay('10');
-              setDefaultBrightness(1); // NOUVEAU
+              setInactivityDelay('10');
+              setMotionEnabled(false);
+              setScreensaverBrightness(0);
+              setDefaultBrightness(0.5);
+              setCertificates([]);
 
               try {
                 await KioskModule.stopLockTask();
@@ -153,7 +279,7 @@ const SettingsScreen: React.FC<SettingsScreenProps> = ({ navigation }) => {
                 // ignore
               }
 
-              Alert.alert('Success', 'Settings reset successfully!\nPlease configure the app again.', [
+              Alert.alert('Success', 'Settings reset successfully!\nPIN and all data cleared.\n\nPlease configure the app again.', [
                 { text: 'OK', onPress: () => navigation.navigate('Kiosk') },
               ]);
             } catch (error) {
@@ -189,6 +315,29 @@ const SettingsScreen: React.FC<SettingsScreenProps> = ({ navigation }) => {
     );
   };
 
+  const handleRemoveCertificate = async (fingerprint: string, url: string): Promise<void> => {
+    Alert.alert(
+      'Remove Certificate',
+      `Remove accepted certificate for:\n\n${url}\n\nFingerprint: ${fingerprint.substring(0, 16)}...\n\nYou will be asked again next time you visit this site.`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Remove',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              await CertificateModuleTyped.removeCertificate(fingerprint);
+              await loadCertificates(); // Reload list
+              Alert.alert('Success', 'Certificate removed successfully');
+            } catch (error) {
+              Alert.alert('Error', `Failed to remove certificate: ${error}`);
+            }
+          },
+        },
+      ],
+    );
+  };
+
   return (
     <ScrollView style={styles.container} keyboardShouldPersistTaps="handled">
       <View style={styles.content}>
@@ -214,12 +363,16 @@ const SettingsScreen: React.FC<SettingsScreenProps> = ({ navigation }) => {
             style={styles.input}
             value={pin}
             onChangeText={setPin}
-            placeholder="1234"
+            placeholder={isPinConfigured ? "••••" : "1234"}
             keyboardType="numeric"
             secureTextEntry
             maxLength={6}
           />
-          <Text style={styles.hint}>Minimum 4 digits (default: 1234)</Text>
+          <Text style={styles.hint}>
+            {isPinConfigured
+              ? "✓ PIN configured - Leave empty to keep current PIN, or enter a new one to change it"
+              : "Minimum 4 digits (default: 1234)"}
+          </Text>
         </View>
 
         {/* NOUVELLE SECTION : Luminosité par défaut */}
@@ -313,12 +466,12 @@ const SettingsScreen: React.FC<SettingsScreenProps> = ({ navigation }) => {
           </View>
         </View>
 
-        {/* Section Screensaver */}
+        {/* Screensaver Settings - Unified Section */}
         <View style={styles.section}>
           <View style={styles.switchRow}>
             <View style={{ flex: 1 }}>
-              <Text style={styles.label}>🛌 Activate Screensaver</Text>
-              <Text style={styles.hint}>Enable or disable the black screen screensaver</Text>
+              <Text style={styles.label}>🛌 Screensaver</Text>
+              <Text style={styles.hint}>Enable or disable screensaver activation</Text>
             </View>
             <Switch
               value={screensaverEnabled}
@@ -329,20 +482,139 @@ const SettingsScreen: React.FC<SettingsScreenProps> = ({ navigation }) => {
           </View>
 
           {screensaverEnabled && (
-            <View style={{ marginTop: 10 }}>
-              <Text style={styles.label}>⏳ Delay (minutes)</Text>
-              <TextInput
-                style={styles.input}
-                value={screensaverDelay}
-                onChangeText={(text) => {
-                  if (/^\d*$/.test(text)) {
-                    setScreensaverDelay(text);
-                  }
-                }}
-                keyboardType="numeric"
-                maxLength={3}
-                placeholder="10"
-              />
+            <>
+              {/* Screensaver Brightness */}
+              <View style={{ marginTop: 20 }}>
+                <Text style={styles.label}>💡 Screensaver Brightness</Text>
+                <Text style={styles.hint}>Screen brightness when screensaver is active</Text>
+
+                {/* Brightness Presets */}
+                <View style={{ flexDirection: 'row', marginTop: 10, flexWrap: 'wrap', gap: 8 }}>
+                  <TouchableOpacity
+                    style={[styles.presetButton, screensaverBrightness === 0 && styles.presetButtonActive]}
+                    onPress={() => setScreensaverBrightness(0)}
+                  >
+                    <Text style={[styles.presetButtonText, screensaverBrightness === 0 && styles.presetButtonTextActive]}>
+                      Black Screen
+                    </Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={[styles.presetButton, screensaverBrightness === 0.05 && styles.presetButtonActive]}
+                    onPress={() => setScreensaverBrightness(0.05)}
+                  >
+                    <Text style={[styles.presetButtonText, screensaverBrightness === 0.05 && styles.presetButtonTextActive]}>
+                      Dim 5%
+                    </Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={[styles.presetButton, screensaverBrightness === 0.1 && styles.presetButtonActive]}
+                    onPress={() => setScreensaverBrightness(0.1)}
+                  >
+                    <Text style={[styles.presetButtonText, screensaverBrightness === 0.1 && styles.presetButtonTextActive]}>
+                      Dim 10%
+                    </Text>
+                  </TouchableOpacity>
+                </View>
+
+                {/* Custom Brightness Slider */}
+                <View style={{ marginTop: 15 }}>
+                  <Text style={styles.brightnessValue}>{Math.round(screensaverBrightness * 100)}%</Text>
+                  <Slider
+                    style={{ width: '100%', height: 40 }}
+                    minimumValue={0}
+                    maximumValue={1}
+                    step={0.01}
+                    value={screensaverBrightness}
+                    onValueChange={setScreensaverBrightness}
+                    minimumTrackTintColor="#0066cc"
+                    maximumTrackTintColor="#ddd"
+                    thumbTintColor="#0066cc"
+                  />
+                </View>
+              </View>
+
+              {/* Inactivity Delay */}
+              <View style={{ marginTop: 20 }}>
+                <Text style={styles.label}>⏳ Inactivity Delay</Text>
+                <Text style={styles.hint}>Time before screensaver activates (in minutes)</Text>
+                <View style={{ marginTop: 10 }}>
+                  <TextInput
+                    style={styles.input}
+                    value={inactivityDelay}
+                    onChangeText={(text) => {
+                      if (/^\d*$/.test(text)) {
+                        setInactivityDelay(text);
+                      }
+                    }}
+                    keyboardType="numeric"
+                    maxLength={3}
+                    placeholder="10"
+                  />
+                </View>
+              </View>
+
+              {/* Motion Detection - BASIC TEST */}
+              <View style={{ marginTop: 20 }}>
+                <View style={styles.switchRow}>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.label}>📷 Motion Detection (TEST)</Text>
+                    <Text style={styles.hint}>Wake screensaver when motion detected</Text>
+                  </View>
+                  <Switch
+                    value={motionEnabled}
+                    onValueChange={toggleMotionDetection}
+                    trackColor={{ false: '#767577', true: '#81b0ff' }}
+                    thumbColor={motionEnabled ? '#0066cc' : '#f4f3f4'}
+                  />
+                </View>
+                {motionEnabled && (
+                  <View style={styles.warningBox}>
+                    <Text style={styles.warningText}>
+                      ⚠️ BETA Feature: Motion detection is experimental
+                    </Text>
+                  </View>
+                )}
+              </View>
+
+            </>
+          )}
+        </View>
+
+        {/* NOUVELLE SECTION : Certificats SSL acceptés */}
+        <View style={styles.section}>
+          <Text style={styles.label}>🔒 Accepted SSL Certificates</Text>
+          <Text style={styles.hint}>
+            Self-signed certificates you've accepted. They expire after 1 year.
+          </Text>
+
+          {certificates.length === 0 ? (
+            <View style={styles.emptyCertsBox}>
+              <Text style={styles.emptyCertsText}>No certificates accepted yet</Text>
+            </View>
+          ) : (
+            <View style={{ marginTop: 15 }}>
+              {certificates.map((cert) => (
+                <View key={cert.fingerprint} style={styles.certItem}>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.certUrl} numberOfLines={1}>
+                      {cert.url}
+                    </Text>
+                    <Text style={styles.certFingerprint} numberOfLines={1}>
+                      {cert.fingerprint.substring(0, 24)}...
+                    </Text>
+                    <Text style={[styles.certExpiry, cert.isExpired && styles.certExpired]}>
+                      {cert.isExpired ? '⚠️ Expired: ' : 'Expires: '}
+                      {cert.expiryDate}
+                    </Text>
+                  </View>
+                  <TouchableOpacity
+                    style={styles.certDeleteButton}
+                    onPress={() => handleRemoveCertificate(cert.fingerprint, cert.url)}
+                  >
+                    <Text style={styles.certDeleteText}>🗑️</Text>
+                  </TouchableOpacity>
+                </View>
+              ))}
             </View>
           )}
         </View>
@@ -545,6 +817,79 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: '#555',
     lineHeight: 22,
+  },
+  emptyCertsBox: {
+    marginTop: 15,
+    padding: 15,
+    backgroundColor: '#f9f9f9',
+    borderRadius: 8,
+    alignItems: 'center',
+  },
+  emptyCertsText: {
+    fontSize: 14,
+    color: '#999',
+    fontStyle: 'italic',
+  },
+  certItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#f9f9f9',
+    padding: 12,
+    borderRadius: 8,
+    marginBottom: 10,
+    borderLeftWidth: 3,
+    borderLeftColor: '#0066cc',
+  },
+  certUrl: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#333',
+    marginBottom: 4,
+  },
+  certFingerprint: {
+    fontSize: 11,
+    color: '#666',
+    fontFamily: 'monospace',
+    marginBottom: 4,
+  },
+  certExpiry: {
+    fontSize: 12,
+    color: '#0066cc',
+  },
+  certExpired: {
+    color: '#d32f2f',
+    fontWeight: '600',
+  },
+  certDeleteButton: {
+    width: 44,
+    height: 44,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginLeft: 10,
+  },
+  certDeleteText: {
+    fontSize: 24,
+  },
+  presetButton: {
+    paddingVertical: 8,
+    paddingHorizontal: 16,
+    borderRadius: 6,
+    borderWidth: 1,
+    borderColor: '#ddd',
+    backgroundColor: '#fff',
+  },
+  presetButtonActive: {
+    backgroundColor: '#0066cc',
+    borderColor: '#0066cc',
+  },
+  presetButtonText: {
+    fontSize: 14,
+    color: '#666',
+    fontWeight: '500',
+  },
+  presetButtonTextActive: {
+    color: '#fff',
+    fontWeight: '600',
   },
 });
 

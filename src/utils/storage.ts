@@ -7,8 +7,18 @@ const KEYS = {
   KIOSK_ENABLED: '@kiosk_enabled',
   AUTO_LAUNCH: '@kiosk_auto_launch',
   SCREENSAVER_ENABLED: '@screensaver_enabled',
+  SCREENSAVER_INACTIVITY_ENABLED: '@screensaver_inactivity_enabled',
+  SCREENSAVER_INACTIVITY_DELAY: '@screensaver_inactivity_delay',
+  SCREENSAVER_MOTION_ENABLED: '@screensaver_motion_enabled',
+  SCREENSAVER_MOTION_SENSITIVITY: '@screensaver_motion_sensitivity',
+  SCREENSAVER_MOTION_DELAY: '@screensaver_motion_delay',
+  SCREENSAVER_BRIGHTNESS: '@screensaver_brightness',
+  DEFAULT_BRIGHTNESS: '@default_brightness',
+  // Legacy keys for backward compatibility
   SCREENSAVER_DELAY: '@screensaver_delay',
-  DEFAULT_BRIGHTNESS: '@default_brightness'
+  MOTION_DETECTION_ENABLED: '@motion_detection_enabled',
+  MOTION_SENSITIVITY: '@motion_sensitivity',
+  MOTION_DELAY: '@motion_delay'
 };
 
 export const StorageService = {
@@ -115,9 +125,19 @@ export const StorageService = {
         KEYS.AUTO_RELOAD,
         KEYS.KIOSK_ENABLED,
         KEYS.AUTO_LAUNCH,
-        KEYS.SCREENSAVER_DELAY,
         KEYS.SCREENSAVER_ENABLED,
+        KEYS.SCREENSAVER_INACTIVITY_ENABLED,
+        KEYS.SCREENSAVER_INACTIVITY_DELAY,
+        KEYS.SCREENSAVER_MOTION_ENABLED,
+        KEYS.SCREENSAVER_MOTION_SENSITIVITY,
+        KEYS.SCREENSAVER_MOTION_DELAY,
+        KEYS.SCREENSAVER_BRIGHTNESS,
         KEYS.DEFAULT_BRIGHTNESS,
+        // Legacy keys
+        KEYS.SCREENSAVER_DELAY,
+        KEYS.MOTION_DETECTION_ENABLED,
+        KEYS.MOTION_SENSITIVITY,
+        KEYS.MOTION_DELAY,
       ]);
     } catch (error) {
       console.error('Error clearing all storage keys:', error);
@@ -175,11 +195,176 @@ export const StorageService = {
   getDefaultBrightness: async (): Promise<number> => {
     try {
       const value = await AsyncStorage.getItem(KEYS.DEFAULT_BRIGHTNESS);
-      // Par défaut 1 (100%) si clé absente
-      return value === null ? 1 : JSON.parse(value);
+      // Par défaut 0.5 (50%) si clé absente
+      return value === null ? 0.5 : JSON.parse(value);
     } catch (error) {
       console.error('Error getting default brightness:', error);
-      return 1;
+      return 0.5;
+    }
+  },
+
+  //MOTION DETECTION
+  saveMotionDetectionEnabled: async (value: boolean): Promise<void> => {
+    try {
+      await AsyncStorage.setItem(KEYS.MOTION_DETECTION_ENABLED, JSON.stringify(value));
+    } catch (error) {
+      console.error('Error saving motion detection enabled:', error);
+    }
+  },
+
+  getMotionDetectionEnabled: async (): Promise<boolean> => {
+    try {
+      const value = await AsyncStorage.getItem(KEYS.MOTION_DETECTION_ENABLED);
+      return value === null ? false : JSON.parse(value);
+    } catch (error) {
+      console.error('Error getting motion detection enabled:', error);
+      return false;
+    }
+  },
+
+  saveMotionSensitivity: async (value: string): Promise<void> => {
+    try {
+      await AsyncStorage.setItem(KEYS.MOTION_SENSITIVITY, value);
+    } catch (error) {
+      console.error('Error saving motion sensitivity:', error);
+    }
+  },
+
+  getMotionSensitivity: async (): Promise<string> => {
+    try {
+      const value = await AsyncStorage.getItem(KEYS.MOTION_SENSITIVITY);
+      return value === null ? 'medium' : value;
+    } catch (error) {
+      console.error('Error getting motion sensitivity:', error);
+      return 'medium';
+    }
+  },
+
+  saveMotionDelay: async (value: number): Promise<void> => {
+    try {
+      await AsyncStorage.setItem(KEYS.MOTION_DELAY, JSON.stringify(value));
+    } catch (error) {
+      console.error('Error saving motion delay:', error);
+    }
+  },
+
+  getMotionDelay: async (): Promise<number> => {
+    try {
+      const value = await AsyncStorage.getItem(KEYS.MOTION_DELAY);
+      // Par défaut 30000 ms (30 secondes) si clé absente
+      return value === null ? 30000 : JSON.parse(value);
+    } catch (error) {
+      console.error('Error getting motion delay:', error);
+      return 30000;
+    }
+  },
+
+  //SCREENSAVER NEW ARCHITECTURE
+  saveScreensaverInactivityEnabled: async (value: boolean): Promise<void> => {
+    try {
+      await AsyncStorage.setItem(KEYS.SCREENSAVER_INACTIVITY_ENABLED, JSON.stringify(value));
+    } catch (error) {
+      console.error('Error saving screensaver inactivity enabled:', error);
+    }
+  },
+
+  getScreensaverInactivityEnabled: async (): Promise<boolean> => {
+    try {
+      const value = await AsyncStorage.getItem(KEYS.SCREENSAVER_INACTIVITY_ENABLED);
+      return value === null ? true : JSON.parse(value); // Par défaut ON
+    } catch (error) {
+      console.error('Error getting screensaver inactivity enabled:', error);
+      return true;
+    }
+  },
+
+  saveScreensaverInactivityDelay: async (value: number): Promise<void> => {
+    try {
+      await AsyncStorage.setItem(KEYS.SCREENSAVER_INACTIVITY_DELAY, JSON.stringify(value));
+    } catch (error) {
+      console.error('Error saving screensaver inactivity delay:', error);
+    }
+  },
+
+  getScreensaverInactivityDelay: async (): Promise<number> => {
+    try {
+      const value = await AsyncStorage.getItem(KEYS.SCREENSAVER_INACTIVITY_DELAY);
+      return value === null ? 600000 : JSON.parse(value); // Par défaut 10 minutes
+    } catch (error) {
+      console.error('Error getting screensaver inactivity delay:', error);
+      return 600000;
+    }
+  },
+
+  saveScreensaverMotionEnabled: async (value: boolean): Promise<void> => {
+    try {
+      await AsyncStorage.setItem(KEYS.SCREENSAVER_MOTION_ENABLED, JSON.stringify(value));
+    } catch (error) {
+      console.error('Error saving screensaver motion enabled:', error);
+    }
+  },
+
+  getScreensaverMotionEnabled: async (): Promise<boolean> => {
+    try {
+      const value = await AsyncStorage.getItem(KEYS.SCREENSAVER_MOTION_ENABLED);
+      return value === null ? false : JSON.parse(value); // Par défaut OFF
+    } catch (error) {
+      console.error('Error getting screensaver motion enabled:', error);
+      return false;
+    }
+  },
+
+  saveScreensaverMotionSensitivity: async (value: string): Promise<void> => {
+    try {
+      await AsyncStorage.setItem(KEYS.SCREENSAVER_MOTION_SENSITIVITY, value);
+    } catch (error) {
+      console.error('Error saving screensaver motion sensitivity:', error);
+    }
+  },
+
+  getScreensaverMotionSensitivity: async (): Promise<string> => {
+    try {
+      const value = await AsyncStorage.getItem(KEYS.SCREENSAVER_MOTION_SENSITIVITY);
+      return value === null ? 'medium' : value;
+    } catch (error) {
+      console.error('Error getting screensaver motion sensitivity:', error);
+      return 'medium';
+    }
+  },
+
+  saveScreensaverMotionDelay: async (value: number): Promise<void> => {
+    try {
+      await AsyncStorage.setItem(KEYS.SCREENSAVER_MOTION_DELAY, JSON.stringify(value));
+    } catch (error) {
+      console.error('Error saving screensaver motion delay:', error);
+    }
+  },
+
+  getScreensaverMotionDelay: async (): Promise<number> => {
+    try {
+      const value = await AsyncStorage.getItem(KEYS.SCREENSAVER_MOTION_DELAY);
+      return value === null ? 30000 : JSON.parse(value); // Par défaut 30 secondes
+    } catch (error) {
+      console.error('Error getting screensaver motion delay:', error);
+      return 30000;
+    }
+  },
+
+  saveScreensaverBrightness: async (value: number): Promise<void> => {
+    try {
+      await AsyncStorage.setItem(KEYS.SCREENSAVER_BRIGHTNESS, JSON.stringify(value));
+    } catch (error) {
+      console.error('Error saving screensaver brightness:', error);
+    }
+  },
+
+  getScreensaverBrightness: async (): Promise<number> => {
+    try {
+      const value = await AsyncStorage.getItem(KEYS.SCREENSAVER_BRIGHTNESS);
+      return value === null ? 0 : JSON.parse(value); // Par défaut 0% (black screen)
+    } catch (error) {
+      console.error('Error getting screensaver brightness:', error);
+      return 0;
     }
   },
 

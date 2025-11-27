@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { View, StyleSheet, TouchableOpacity } from 'react-native';
 import RNBrightness from 'react-native-brightness-newarch';
 import WebViewComponent from '../components/WebViewComponent';
+import MotionDetector from '../components/MotionDetector';
 import { StorageService } from '../utils/storage';
 import KioskModule from '../utils/KioskModule';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
@@ -20,9 +21,12 @@ const KioskScreen: React.FC<KioskScreenProps> = ({ navigation }) => {
   const [url, setUrl] = useState<string>('');
   const [autoReload, setAutoReload] = useState<boolean>(false);
   const [screensaverEnabled, setScreensaverEnabled] = useState(false);
-  const [screensaverDelay, setScreensaverDelay] = useState(600000);
   const [isScreensaverActive, setIsScreensaverActive] = useState(false);
-  const [defaultBrightness, setDefaultBrightness] = useState<number>(1);
+  const [defaultBrightness, setDefaultBrightness] = useState<number>(0.5);
+  const [screensaverBrightness, setScreensaverBrightness] = useState<number>(0);
+  const [inactivityEnabled, setInactivityEnabled] = useState(true);
+  const [inactivityDelay, setInactivityDelay] = useState(600000);
+  const [motionEnabled, setMotionEnabled] = useState(false);
   const timerRef = useRef<any>(null);
 
   useEffect(() => {
@@ -47,11 +51,13 @@ const KioskScreen: React.FC<KioskScreenProps> = ({ navigation }) => {
       (async () => {
         try {
           await RNBrightness.setBrightnessLevel(defaultBrightness);
-          console.log(`Luminosité appliquée: ${Math.round(defaultBrightness * 100)}%`);
+          console.log(`[DEBUG Brightness] Luminosité normale appliquée: ${Math.round(defaultBrightness * 100)}%`);
         } catch (error) {
-          console.error('Erreur application luminosité:', error);
+          console.error('[DEBUG Brightness] Erreur application luminosité:', error);
         }
       })();
+    } else {
+      console.log('[DEBUG Brightness] Screensaver active, skipping brightness restore');
     }
   }, [defaultBrightness, isScreensaverActive]);
 
@@ -59,16 +65,17 @@ const KioskScreen: React.FC<KioskScreenProps> = ({ navigation }) => {
     if (isScreensaverActive) {
       enableScreensaverEffects();
     }
-  }, [isScreensaverActive]);
+  }, [isScreensaverActive, screensaverBrightness]);
 
   useEffect(() => {
-    if (screensaverEnabled) {
+    if (screensaverEnabled && inactivityEnabled) {
       resetTimer();
     } else {
       clearTimer();
       setIsScreensaverActive(false);
     }
-  }, [screensaverEnabled, screensaverDelay]);
+  }, [screensaverEnabled, inactivityEnabled, inactivityDelay]);
+
 
   const loadSettings = async (): Promise<void> => {
     try {
@@ -76,14 +83,28 @@ const KioskScreen: React.FC<KioskScreenProps> = ({ navigation }) => {
       const savedAutoReload = await StorageService.getAutoReload();
       const savedKioskEnabled = await StorageService.getKioskEnabled();
       const savedScreensaverEnabled = await StorageService.getScreensaverEnabled();
-      const savedScreensaverDelay = await StorageService.getScreensaverDelay();
       const savedDefaultBrightness = await StorageService.getDefaultBrightness();
+      const savedScreensaverBrightness = await StorageService.getScreensaverBrightness();
+      const savedInactivityEnabled = await StorageService.getScreensaverInactivityEnabled();
+      const savedInactivityDelay = await StorageService.getScreensaverInactivityDelay();
+      const savedMotionEnabled = await StorageService.getScreensaverMotionEnabled();
+
+      console.log('[DEBUG loadSettings] URL:', savedUrl);
+      console.log('[DEBUG loadSettings] Screensaver enabled:', savedScreensaverEnabled);
+      console.log('[DEBUG loadSettings] Default brightness:', savedDefaultBrightness);
+      console.log('[DEBUG loadSettings] Screensaver brightness:', savedScreensaverBrightness);
+      console.log('[DEBUG loadSettings] Inactivity enabled:', savedInactivityEnabled);
+      console.log('[DEBUG loadSettings] Inactivity delay (ms):', savedInactivityDelay);
+      console.log('[DEBUG loadSettings] Motion enabled:', savedMotionEnabled);
 
       if (savedUrl) setUrl(savedUrl);
       setAutoReload(savedAutoReload);
       setScreensaverEnabled(savedScreensaverEnabled ?? false);
-      setScreensaverDelay(savedScreensaverDelay ?? 600000);
-      setDefaultBrightness(savedDefaultBrightness ?? 1);
+      setDefaultBrightness(savedDefaultBrightness ?? 0.5);
+      setScreensaverBrightness(savedScreensaverBrightness ?? 0);
+      setInactivityEnabled(savedInactivityEnabled ?? true);
+      setInactivityDelay(savedInactivityDelay ?? 600000);
+      setMotionEnabled(savedMotionEnabled ?? false);
 
       if (savedKioskEnabled) {
         try {
@@ -107,11 +128,11 @@ const KioskScreen: React.FC<KioskScreenProps> = ({ navigation }) => {
 
   const resetTimer = () => {
     clearTimer();
-    if (screensaverEnabled) {
+    if (screensaverEnabled && inactivityEnabled) {
       timerRef.current = setTimeout(() => {
         setIsScreensaverActive(true);
-      }, screensaverDelay);
-      console.log('[DEBUG] Timer reset');
+      }, inactivityDelay);
+      console.log('[DEBUG] Inactivity timer reset');
     }
   };
 
@@ -119,12 +140,12 @@ const KioskScreen: React.FC<KioskScreenProps> = ({ navigation }) => {
     if (timerRef.current) {
       clearTimeout(timerRef.current);
       timerRef.current = null;
-      console.log('[DEBUG] Timer cleared');
+      console.log('[DEBUG] Inactivity timer cleared');
     }
   };
 
-  // Cette fonction sera appelée par WebViewComponent à chaque interaction utilisateur détectée
   const onUserInteraction = () => {
+    console.log('[DEBUG] User interaction detected, resetting timer');
     resetTimer();
     if (isScreensaverActive) {
       setIsScreensaverActive(false);
@@ -138,10 +159,21 @@ const KioskScreen: React.FC<KioskScreenProps> = ({ navigation }) => {
     console.log('[DEBUG] Screensaver deactivated by tap on overlay');
   };
 
+  const onMotionDetected = () => {
+    console.log('[DEBUG MOTION] Motion detected!');
+    if (isScreensaverActive) {
+      console.log('[DEBUG MOTION] Waking up screensaver and resetting timer');
+      setIsScreensaverActive(false);
+      resetTimer(); // IMPORTANT: Reset timer after waking up
+    } else {
+      console.log('[DEBUG MOTION] Screensaver not active, ignoring');
+    }
+  };
+
   const enableScreensaverEffects = async () => {
     try {
-      await RNBrightness.setBrightnessLevel(0);
-      console.log('Screensaver activé : luminosité à 0');
+      await RNBrightness.setBrightnessLevel(screensaverBrightness);
+      console.log(`Screensaver activé : luminosité à ${Math.round(screensaverBrightness * 100)}%`);
     } catch (error) {
       console.error('Erreur activation luminosité screensaver:', error);
     }
@@ -167,6 +199,13 @@ const KioskScreen: React.FC<KioskScreenProps> = ({ navigation }) => {
   return (
     <View style={styles.container}>
       <WebViewComponent url={url} autoReload={autoReload} onUserInteraction={onUserInteraction} />
+
+      {/* Motion Detector - Only active when screensaver is ON */}
+      <MotionDetector
+        enabled={motionEnabled && isScreensaverActive}
+        onMotionDetected={onMotionDetected}
+        sensitivity="medium"
+      />
 
       <TouchableOpacity
         style={styles.secretButton}

@@ -11,6 +11,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ***
 
 
+## [1.0.5] - 2025-11-26
+
+
+### Added
+- 🎥 Motion detection (Beta): Camera-based motion detection to exit screensaver mode
+- 🍪 Cookie management: Basic cookie handling via react-native-cookies for web session persistence
+
+
+### Changed
+- 🚀 WebView optimization: Performance improvements specifically for Fire OS tablets
+- 🔒 Enhanced WebView security: Additional security measures for safe web content display
+
+
+### Fixed
+- 🐛 WebView stability improvements on Fire OS devices
+
+
+***
+
+
 ## [1.0.4] - 2025-11-19
 
 
@@ -117,8 +137,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ***
 
 
+[1.0.5]: https://github.com/rushb-fr/freekiosk/releases/tag/v1.0.5
 [1.0.4]: https://github.com/rushb-fr/freekiosk/releases/tag/v1.0.4
 [1.0.3]: https://github.com/rushb-fr/freekiosk/releases/tag/v1.0.3
 [1.0.2]: https://github.com/rushb-fr/freekiosk/releases/tag/v1.0.2
 [1.0.1]: https://github.com/rushb-fr/freekiosk/releases/tag/v1.0.1
-[Unreleased]: https://github.com/rushb-fr/freekiosk/compare/v1.0.4...HEAD
+[Unreleased]: https://github.com/rushb-fr/freekiosk/compare/v1.0.5...HEAD

@@ -1,0 +1,461 @@
+import * as Keychain from 'react-native-keychain';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+
+// Constants
+const PIN_SERVICE = 'freekiosk_pin';
+const ATTEMPTS_KEY = '@kiosk_pin_attempts';
+const LOCKOUT_KEY = '@kiosk_pin_lockout';
+const MAX_ATTEMPTS = 5;
+const LOCKOUT_DURATION = 15 * 60 * 1000; // 15 minutes in milliseconds
+
+// Crypto constants
+const PBKDF2_ITERATIONS = 100000; // 100k iterations (secure)
+const SALT_LENGTH = 32; // 32 bytes = 256 bits
+
+interface PinAttempts {
+  count: number;
+  lastAttempt: number;
+  lockoutUntil: number | null;
+}
+
+/**
+ * NOUVELLE IMPLÉMENTATION SÉCURISÉE
+ * Utilise PBKDF2 avec 100 000 itérations
+ */
+async function hashPin(pin: string, salt: Uint8Array): Promise<string> {
+  try {
+    // Check if Web Crypto API is available
+    if (typeof crypto !== 'undefined' && crypto.subtle) {
+      console.log('[SecureStorage] Using Web Crypto API (PBKDF2)');
+
+      // Convert PIN to bytes
+      const encoder = new TextEncoder();
+      const pinBytes = encoder.encode(pin);
+
+      // Import key material
+      const keyMaterial = await crypto.subtle.importKey(
+        'raw',
+        pinBytes,
+        { name: 'PBKDF2' },
+        false,
+        ['deriveBits']
+      );
+
+      // Derive bits using PBKDF2
+      const derivedBits = await crypto.subtle.deriveBits(
+        {
+          name: 'PBKDF2',
+          salt: salt,
+          iterations: PBKDF2_ITERATIONS,
+          hash: 'SHA-256'
+        },
+        keyMaterial,
+        256 // 256 bits output
+      );
+
+      // Convert to hex string
+      const hashArray = Array.from(new Uint8Array(derivedBits));
+      const hashHex = hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+
+      return hashHex;
+    } else {
+      // Fallback: Use react-native-keychain's internal crypto
+      console.warn('[SecureStorage] Web Crypto API not available, using fallback');
+      return await fallbackHashPin(pin, salt);
+    }
+  } catch (error) {
+    console.error('[SecureStorage] Error in hashPin:', error);
+    // Use fallback on error
+    return await fallbackHashPin(pin, salt);
+  }
+}
+
+/**
+ * Fallback implementation using simple but stronger hashing
+ * Still better than the original but not as good as PBKDF2
+ */
+async function fallbackHashPin(pin: string, salt: Uint8Array): Promise<string> {
+  console.warn('[SecureStorage] Using fallback hash (not PBKDF2)');
+
+  // Convert salt to string
+  const saltStr = Array.from(salt).map(b => b.toString(16).padStart(2, '0')).join('');
+
+  // Use multiple rounds of SHA-like hashing
+  let hash = pin + saltStr;
+
+  // More iterations than before (10000 instead of 1000)
+  for (let i = 0; i < 10000; i++) {
+    let h = 0;
+    for (let j = 0; j < hash.length; j++) {
+      const char = hash.charCodeAt(j);
+      h = ((h << 5) - h) + char;
+      h = h & h;
+    }
+    // Add iteration counter and mix better
+    hash = h.toString(36) + i.toString(36) + hash.substring(0, 20);
+  }
+
+  return hash;
+}
+
+/**
+ * NOUVELLE IMPLÉMENTATION SÉCURISÉE
+ * Generate a cryptographically secure random salt
+ */
+function generateSalt(): Uint8Array {
+  const array = new Uint8Array(SALT_LENGTH);
+
+  if (typeof crypto !== 'undefined' && crypto.getRandomValues) {
+    // Use secure random (Web Crypto API)
+    crypto.getRandomValues(array);
+    console.log('[SecureStorage] Generated secure salt using crypto.getRandomValues');
+  } else {
+    // Fallback: Use Math.random() but warn
+    console.warn('[SecureStorage] crypto.getRandomValues not available, using Math.random (INSECURE)');
+    for (let i = 0; i < array.length; i++) {
+      array[i] = Math.floor(Math.random() * 256);
+    }
+  }
+
+  return array;
+}
+
+/**
+ * Convert Uint8Array to hex string for storage
+ */
+function bytesToHex(bytes: Uint8Array): string {
+  return Array.from(bytes).map(b => b.toString(16).padStart(2, '0')).join('');
+}
+
+/**
+ * Convert hex string to Uint8Array
+ */
+function hexToBytes(hex: string): Uint8Array {
+  const bytes = new Uint8Array(hex.length / 2);
+  for (let i = 0; i < bytes.length; i++) {
+    bytes[i] = parseInt(hex.substr(i * 2, 2), 16);
+  }
+  return bytes;
+}
+
+/**
+ * Securely save PIN with PBKDF2 hashing
+ */
+export async function saveSecurePin(pin: string): Promise<boolean> {
+  try {
+    const salt = generateSalt();
+    const hashedPin = await hashPin(pin, salt);
+
+    // Store hashed PIN + salt in Android Keystore via react-native-keychain
+    await Keychain.setGenericPassword(
+      'pin',
+      JSON.stringify({
+        hash: hashedPin,
+        salt: bytesToHex(salt)
+      }),
+      {
+        service: PIN_SERVICE,
+        accessible: Keychain.ACCESSIBLE.WHEN_UNLOCKED,
+      }
+    );
+
+    // Reset attempts when new PIN is set
+    await resetPinAttempts();
+
+    console.log('[SecureStorage] PIN saved securely with PBKDF2');
+    return true;
+  } catch (error) {
+    console.error('[SecureStorage] Error saving PIN:', error);
+    return false;
+  }
+}
+
+/**
+ * Verify PIN against stored hash
+ * Supports migration from legacy plaintext PIN (v1.0.0-1.0.3) to PBKDF2
+ */
+export async function verifySecurePin(inputPin: string): Promise<{
+  success: boolean;
+  attemptsRemaining?: number;
+  lockoutTimeRemaining?: number;
+  message?: string;
+}> {
+  try {
+    // Check if locked out
+    const lockoutStatus = await checkLockout();
+    if (lockoutStatus.isLockedOut) {
+      return {
+        success: false,
+        lockoutTimeRemaining: lockoutStatus.timeRemaining ?? undefined,
+        message: `Too many failed attempts. Try again in ${Math.ceil((lockoutStatus.timeRemaining || 0) / 60000)} minutes.`,
+      };
+    }
+
+    // Get stored PIN data from Keystore
+    const credentials = await Keychain.getGenericPassword({ service: PIN_SERVICE });
+
+    if (!credentials) {
+      // No PIN in Keystore - Check for legacy plaintext PIN in AsyncStorage (v0)
+      const legacyPlaintextPin = await checkLegacyPlaintextPin();
+
+      if (legacyPlaintextPin) {
+        // Found plaintext PIN from v1.0.0-1.0.3
+        console.log('[SecureStorage] Detected legacy plaintext PIN (v0), will migrate to v2');
+
+        if (inputPin === legacyPlaintextPin) {
+          // Success - migrate to v2
+          console.log('[SecureStorage] Plaintext PIN verified, migrating to v2...');
+          await saveSecurePin(inputPin); // Save with PBKDF2
+          await clearLegacyPlaintextPin(); // Remove plaintext
+          await resetPinAttempts();
+          return {
+            success: true,
+            message: 'PIN upgraded from plaintext to secure PBKDF2'
+          };
+        } else {
+          // Failed plaintext verification
+          await recordFailedAttempt();
+          const attempts = await getPinAttempts();
+
+          if (attempts.count >= MAX_ATTEMPTS) {
+            return {
+              success: false,
+              lockoutTimeRemaining: LOCKOUT_DURATION,
+              message: `Too many failed attempts. Locked for 15 minutes.`,
+            };
+          }
+
+          return {
+            success: false,
+            attemptsRemaining: MAX_ATTEMPTS - attempts.count,
+            message: 'Incorrect PIN',
+          };
+        }
+      }
+
+      // No PIN at all - use default '1234' (backward compatibility)
+      if (inputPin === '1234') {
+        await resetPinAttempts();
+        return { success: true };
+      } else {
+        await recordFailedAttempt();
+        const attempts = await getPinAttempts();
+        return {
+          success: false,
+          attemptsRemaining: MAX_ATTEMPTS - attempts.count,
+          message: 'Incorrect PIN',
+        };
+      }
+    }
+
+    // Has PIN in Keystore - Verify with PBKDF2 (v2)
+    const pinData = JSON.parse(credentials.password);
+    const { hash: storedHash, salt: saltHex } = pinData;
+    const salt = hexToBytes(saltHex);
+    const inputHash = await hashPin(inputPin, salt);
+
+    if (inputHash === storedHash) {
+      // Success - reset attempts
+      await resetPinAttempts();
+      return { success: true };
+    } else {
+      // Failed - record attempt
+      await recordFailedAttempt();
+      const attempts = await getPinAttempts();
+
+      if (attempts.count >= MAX_ATTEMPTS) {
+        return {
+          success: false,
+          lockoutTimeRemaining: LOCKOUT_DURATION,
+          message: `Too many failed attempts. Locked for 15 minutes.`,
+        };
+      }
+
+      return {
+        success: false,
+        attemptsRemaining: MAX_ATTEMPTS - attempts.count,
+        message: 'Incorrect PIN',
+      };
+    }
+  } catch (error) {
+    console.error('[SecureStorage] Error verifying PIN:', error);
+    return {
+      success: false,
+      message: 'Error verifying PIN',
+    };
+  }
+}
+
+/**
+ * Get current PIN attempts data
+ */
+async function getPinAttempts(): Promise<PinAttempts> {
+  try {
+    const data = await AsyncStorage.getItem(ATTEMPTS_KEY);
+    if (data) {
+      return JSON.parse(data);
+    }
+  } catch (error) {
+    console.error('[SecureStorage] Error reading attempts:', error);
+  }
+
+  return {
+    count: 0,
+    lastAttempt: 0,
+    lockoutUntil: null,
+  };
+}
+
+/**
+ * Record a failed PIN attempt
+ */
+async function recordFailedAttempt(): Promise<void> {
+  try {
+    const attempts = await getPinAttempts();
+    const now = Date.now();
+
+    attempts.count += 1;
+    attempts.lastAttempt = now;
+
+    // If max attempts reached, set lockout
+    if (attempts.count >= MAX_ATTEMPTS) {
+      attempts.lockoutUntil = now + LOCKOUT_DURATION;
+      console.warn('[SecureStorage] Max attempts reached - locking for 15 minutes');
+    }
+
+    await AsyncStorage.setItem(ATTEMPTS_KEY, JSON.stringify(attempts));
+    console.log(`[SecureStorage] Failed attempt recorded: ${attempts.count}/${MAX_ATTEMPTS}`);
+  } catch (error) {
+    console.error('[SecureStorage] Error recording attempt:', error);
+  }
+}
+
+/**
+ * Reset PIN attempts counter
+ */
+async function resetPinAttempts(): Promise<void> {
+  try {
+    await AsyncStorage.multiRemove([ATTEMPTS_KEY, LOCKOUT_KEY]);
+    console.log('[SecureStorage] PIN attempts reset');
+  } catch (error) {
+    console.error('[SecureStorage] Error resetting attempts:', error);
+  }
+}
+
+/**
+ * Check if currently locked out
+ */
+async function checkLockout(): Promise<{
+  isLockedOut: boolean;
+  timeRemaining: number | null;
+}> {
+  try {
+    const attempts = await getPinAttempts();
+
+    if (!attempts.lockoutUntil) {
+      return { isLockedOut: false, timeRemaining: null };
+    }
+
+    const now = Date.now();
+    const timeRemaining = attempts.lockoutUntil - now;
+
+    if (timeRemaining > 0) {
+      return { isLockedOut: true, timeRemaining };
+    } else {
+      // Lockout expired - reset
+      await resetPinAttempts();
+      return { isLockedOut: false, timeRemaining: null };
+    }
+  } catch (error) {
+    console.error('[SecureStorage] Error checking lockout:', error);
+    return { isLockedOut: false, timeRemaining: null };
+  }
+}
+
+/**
+ * Get lockout status for UI display
+ */
+export async function getLockoutStatus(): Promise<{
+  isLockedOut: boolean;
+  timeRemaining: number | null;
+  attemptsRemaining: number;
+}> {
+  const lockout = await checkLockout();
+  const attempts = await getPinAttempts();
+
+  return {
+    isLockedOut: lockout.isLockedOut,
+    timeRemaining: lockout.timeRemaining,
+    attemptsRemaining: Math.max(0, MAX_ATTEMPTS - attempts.count),
+  };
+}
+
+/**
+ * Check if PIN exists (for migration from old system)
+ */
+export async function hasSecurePin(): Promise<boolean> {
+  try {
+    const credentials = await Keychain.getGenericPassword({ service: PIN_SERVICE });
+    return !!credentials;
+  } catch (error) {
+    return false;
+  }
+}
+
+/**
+ * Migrate old plaintext PIN to secure storage
+ */
+export async function migrateOldPin(oldPin: string | null): Promise<void> {
+  try {
+    if (oldPin && oldPin !== '1234') {
+      console.log('[SecureStorage] Migrating old PIN to secure storage (v2)');
+      await saveSecurePin(oldPin);
+    }
+  } catch (error) {
+    console.error('[SecureStorage] Error migrating PIN:', error);
+  }
+}
+
+/**
+ * Clear all PIN data (for reset)
+ */
+export async function clearSecurePin(): Promise<void> {
+  try {
+    await Keychain.resetGenericPassword({ service: PIN_SERVICE });
+    await resetPinAttempts();
+    await clearLegacyPlaintextPin(); // Also clear any plaintext PIN
+    console.log('[SecureStorage] PIN cleared');
+  } catch (error) {
+    console.error('[SecureStorage] Error clearing PIN:', error);
+  }
+}
+
+/**
+ * Check for legacy plaintext PIN in AsyncStorage (v1.0.0-1.0.3)
+ */
+async function checkLegacyPlaintextPin(): Promise<string | null> {
+  try {
+    // Check old storage key used in v1.0.0-1.0.3
+    const plaintextPin = await AsyncStorage.getItem('@kiosk_pin');
+    if (plaintextPin && plaintextPin !== '' && plaintextPin !== '1234') {
+      console.log('[SecureStorage] Found legacy plaintext PIN in AsyncStorage');
+      return plaintextPin;
+    }
+    return null;
+  } catch (error) {
+    console.error('[SecureStorage] Error checking legacy PIN:', error);
+    return null;
+  }
+}
+
+/**
+ * Clear legacy plaintext PIN from AsyncStorage
+ */
+async function clearLegacyPlaintextPin(): Promise<void> {
+  try {
+    await AsyncStorage.removeItem('@kiosk_pin');
+    console.log('[SecureStorage] Legacy plaintext PIN removed from AsyncStorage');
+  } catch (error) {
+    console.error('[SecureStorage] Error clearing legacy PIN:', error);
+  }
+}

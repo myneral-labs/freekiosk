@@ -44,34 +44,57 @@ const WebViewComponent: React.FC<WebViewComponentProps> = ({
   }, []);
 
   // Injection JS pour détecter les clics dans la webview
+  // Optimisé pour Fire OS : throttling des événements, protection double-init
   const injectedJavaScript = `
     (function() {
-      console.log('[FreeKiosk] Navigation interceptor starting...');
-      
-      document.addEventListener('click', function(e) {
-        let target = e.target;
-        
-        while (target && target.tagName !== 'A') {
-          target = target.parentElement;
-        }
-        
-        if (target && target.tagName === 'A' && target.href) {
-          console.log('[FreeKiosk] Link clicked:', target.href);
-          e.preventDefault();
-          e.stopPropagation();
-          window.location.href = target.href;
-          return false;
-        }
-      }, true);
+    // Protection contre double exécution (important pour Fire OS)
+    if (window.__FREEKIOSK_INITIALIZED__) {
+      return;
+    }
+    window.__FREEKIOSK_INITIALIZED__ = true;
 
-      // Envoi message React Native à chaque clic utilisateur
-      document.addEventListener('click', function() {
+    // Throttling pour éviter le flood de messages (critique sur Fire OS)
+    let lastInteraction = 0;
+    const THROTTLE_MS = 200; // Max 5 messages/sec
+
+    function sendInteraction() {
+      const now = Date.now();
+      if (now - lastInteraction > THROTTLE_MS) {
         window.ReactNativeWebView.postMessage('user-interaction');
-      });
-      
-      console.log('[FreeKiosk] Navigation interceptor active');
-    })();
-    true;
+        lastInteraction = now;
+      }
+    }
+
+    // Click handler avec navigation
+    document.addEventListener('click', function(e) {
+      let target = e.target;
+      while (target && target.tagName !== 'A') {
+        target = target.parentElement;
+      }
+
+     if (target && target.tagName === 'A' && target.href) {
+        e.preventDefault();
+        e.stopPropagation();
+
+        // Envoi message avant navigation pour reset timer
+        sendInteraction();
+
+        window.location.href = target.href;
+        return false;
+      }
+
+      // Envoi message sur tout autre clic non lien
+      sendInteraction();
+    }, true);
+
+    // Scroll avec throttling (évite 50+ msg/sec)
+    document.addEventListener('scroll', sendInteraction, true);
+
+    // Touch events avec throttling
+    document.addEventListener('touchstart', sendInteraction, true);
+    document.addEventListener('touchmove', sendInteraction, true);
+  })();
+  true;
   `;
 
   // Gestion des messages venant de la webview
@@ -175,7 +198,7 @@ const WebViewComponent: React.FC<WebViewComponentProps> = ({
 
             {/* Footer */}
             <Text style={styles.footerText}>
-              Version 1.0.4 • by Rushb
+              Version 1.0.5 • by Rushb
             </Text>
           </Animated.View>
         </ScrollView>
@@ -190,10 +213,10 @@ const WebViewComponent: React.FC<WebViewComponentProps> = ({
         source={{ uri: url }}
         style={styles.webview}
         
-        originWhitelist={['*']}
+        originWhitelist={['http://*', 'https://*']}
         mixedContentMode="always"
         onHttpError={handleHttpError}
-        
+
         onLoadStart={() => {
           console.log('[FreeKiosk] Load started');
           setLoading(true);
@@ -204,33 +227,45 @@ const WebViewComponent: React.FC<WebViewComponentProps> = ({
           setLoading(false);
         }}
         onError={handleError}
-        
+
         javaScriptEnabled={true}
         domStorageEnabled={true}
         injectedJavaScript={injectedJavaScript}
-        injectedJavaScriptBeforeContentLoaded={injectedJavaScript}
 
         onMessage={onMessageHandler}
 
         startInLoadingState={true}
-        
+
         onShouldStartLoadWithRequest={(request: ShouldStartLoadRequest) => {
           console.log('[FreeKiosk] Navigation request:', request.url);
+
+          // Security: Block dangerous URL schemes
+          const urlLower = request.url.toLowerCase();
+          if (urlLower.startsWith('file://') ||
+              urlLower.startsWith('javascript:') ||
+              urlLower.startsWith('data:')) {
+            console.warn('[FreeKiosk] Blocked dangerous URL scheme:', request.url);
+            return false;
+          }
+
           return true;
         }}
-        
+
         onNavigationStateChange={(navState) => {
           console.log('[FreeKiosk] Navigation state:', navState.url, 'Loading:', navState.loading);
         }}
-        
+
         scalesPageToFit={true}
         cacheEnabled={true}
-        cacheMode="LOAD_DEFAULT"
-        
-        allowFileAccess={true}
-        allowUniversalAccessFromFileURLs={true}
-        allowFileAccessFromFileURLs={true}
-        
+        incognito={false}
+        sharedCookiesEnabled={true}
+        thirdPartyCookiesEnabled={true}
+
+        // Security: Disable file access to prevent reading local files
+        allowFileAccess={false}
+        allowUniversalAccessFromFileURLs={false}
+        allowFileAccessFromFileURLs={false}
+
         mediaPlaybackRequiresUserAction={false}
         allowsInlineMediaPlayback={true}
       />
