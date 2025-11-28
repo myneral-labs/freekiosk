@@ -34,6 +34,7 @@ const WebViewComponent: React.FC<WebViewComponentProps> = ({
   const [loading, setLoading] = useState<boolean>(true);
   const [error, setError] = useState<boolean>(false);
   const fadeAnim = useRef(new Animated.Value(0)).current;
+  const loadingTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   React.useEffect(() => {
     Animated.timing(fadeAnim, {
@@ -41,6 +42,16 @@ const WebViewComponent: React.FC<WebViewComponentProps> = ({
       duration: 800,
       useNativeDriver: true,
     }).start();
+  }, [fadeAnim]);
+
+  // Cleanup timeout on unmount
+  React.useEffect(() => {
+    return () => {
+      const timeout = loadingTimeoutRef.current;
+      if (timeout) {
+        clearTimeout(timeout);
+      }
+    };
   }, []);
 
   // Injection JS pour détecter les clics dans la webview
@@ -52,6 +63,20 @@ const WebViewComponent: React.FC<WebViewComponentProps> = ({
       return;
     }
     window.__FREEKIOSK_INITIALIZED__ = true;
+
+    // Debug storage availability for Pinia/Nuxt
+    console.log('[FreeKiosk Debug] localStorage available:', typeof localStorage !== 'undefined');
+    console.log('[FreeKiosk Debug] sessionStorage available:', typeof sessionStorage !== 'undefined');
+    console.log('[FreeKiosk Debug] Cookie:', document.cookie ? 'enabled' : 'disabled');
+    
+    // Ensure storage is working properly
+    try {
+      localStorage.setItem('__test__', '1');
+      localStorage.removeItem('__test__');
+      console.log('[FreeKiosk Debug] localStorage: WORKING');
+    } catch(e) {
+      console.error('[FreeKiosk Debug] localStorage: FAILED', e);
+    }
 
     // Throttling pour éviter le flood de messages (critique sur Fire OS)
     let lastInteraction = 0;
@@ -213,6 +238,9 @@ const WebViewComponent: React.FC<WebViewComponentProps> = ({
         source={{ uri: url }}
         style={styles.webview}
         
+        // User Agent - Mimic Chrome to ensure proper storage APIs
+        userAgent="Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        
         originWhitelist={['http://*', 'https://*']}
         mixedContentMode="always"
         onHttpError={handleHttpError}
@@ -221,10 +249,31 @@ const WebViewComponent: React.FC<WebViewComponentProps> = ({
           console.log('[FreeKiosk] Load started');
           setLoading(true);
           setError(false);
+          
+          // Clear any existing timeout
+          if (loadingTimeoutRef.current) {
+            clearTimeout(loadingTimeoutRef.current);
+          }
+          
+          // Fallback: Force hide spinner after 5 seconds if onLoadEnd doesn't fire
+          // This is common with SPAs like Nuxt that continue loading assets
+          loadingTimeoutRef.current = setTimeout(() => {
+            console.log('[FreeKiosk] Load timeout - forcing spinner hide');
+            setLoading(false);
+          }, 5000);
         }}
         onLoadEnd={() => {
           console.log('[FreeKiosk] Load ended');
-          setLoading(false);
+          
+          // Clear timeout since load completed
+          if (loadingTimeoutRef.current) {
+            clearTimeout(loadingTimeoutRef.current);
+          }
+          
+          // Hide spinner after short delay to ensure content is visible
+          setTimeout(() => {
+            setLoading(false);
+          }, 500);
         }}
         onError={handleError}
 
@@ -253,6 +302,21 @@ const WebViewComponent: React.FC<WebViewComponentProps> = ({
 
         onNavigationStateChange={(navState) => {
           console.log('[FreeKiosk] Navigation state:', navState.url, 'Loading:', navState.loading);
+          
+          // Additional safety: Hide spinner when navigation completes
+          if (!navState.loading && loading) {
+            console.log('[FreeKiosk] Navigation complete, hiding spinner');
+            setTimeout(() => setLoading(false), 300);
+          }
+        }}
+
+        onLoadProgress={({ nativeEvent }) => {
+          // Log progress for debugging
+          if (nativeEvent.progress === 1) {
+            console.log('[FreeKiosk] Progress: 100% - Page fully loaded');
+            // Ensure spinner hides when progress reaches 100%
+            setTimeout(() => setLoading(false), 300);
+          }
         }}
 
         scalesPageToFit={true}
@@ -260,6 +324,10 @@ const WebViewComponent: React.FC<WebViewComponentProps> = ({
         incognito={false}
         sharedCookiesEnabled={true}
         thirdPartyCookiesEnabled={true}
+        
+        // Storage settings for Pinia/Nuxt compatibility
+        cacheMode="LOAD_DEFAULT"
+        setSupportMultipleWindows={false}
 
         // Security: Disable file access to prevent reading local files
         allowFileAccess={false}

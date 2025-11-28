@@ -6,10 +6,11 @@ import com.facebook.react.defaults.DefaultNewArchitectureEntryPoint.fabricEnable
 import com.facebook.react.defaults.DefaultReactActivityDelegate
 import android.os.Bundle
 import android.view.View
-import android.view.WindowManager  // ⬅️ NOUVEAU
+import android.view.WindowManager
 import android.app.admin.DevicePolicyManager
 import android.content.ComponentName
 import android.content.Context
+import android.webkit.WebView  // ⬅️ NOUVEAU pour Pinia/localStorage
 
 class MainActivity : ReactActivity() {
 
@@ -26,6 +27,19 @@ class MainActivity : ReactActivity() {
     
     // ⬇️ NOUVEAU - Keep screen always on
     window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+    
+    // ⬇️ CRITICAL FIX for Pinia/localStorage - Enable WebView data directory
+    try {
+      WebView.setWebContentsDebuggingEnabled(true)  // Enable debugging
+      val webView = WebView(applicationContext)
+      val webSettings = webView.settings
+      webSettings.domStorageEnabled = true  // Enable localStorage/sessionStorage
+      webSettings.databaseEnabled = true     // Enable Web SQL Database
+      webSettings.javaScriptEnabled = true   // Ensure JS is enabled
+      android.util.Log.d("MainActivity", "WebView storage configured for Pinia/Nuxt")
+    } catch (e: Exception) {
+      android.util.Log.e("MainActivity", "Error configuring WebView storage: ${e.message}")
+    }
     
     devicePolicyManager = getSystemService(Context.DEVICE_POLICY_SERVICE) as DevicePolicyManager
     adminComponent = ComponentName(this, DeviceAdminReceiver::class.java)
